@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const Invoice = require('../model/invoice');
 const Order = require('../model/order');
-const Barang = require('../model/barang');
+const OrderDetail = require('../model/order_detail');
 
 const invoiceController = {
   getAllInvoice: (req, res) => {
@@ -17,6 +17,13 @@ const invoiceController = {
     Invoice.getById(req.params.id, (err, results) => {
       if (err) return res.status(500).json({ message: 'Server error' });
       if (results.length === 0) return res.status(404).json({ message: 'Invoice tidak ditemukan' });
+      res.json(results[0]);
+    });
+  },
+  getInvoiceByOrderId: (req, res) => {
+    Invoice.getByOrderId(req.params.orderId, (err, results) => {
+      if (err) return res.status(500).json({ message: 'Server error' });
+      if (results.length === 0) return res.status(404).json({ message: 'Invoice tidak ditemukan untuk order ini' });
       res.json(results[0]);
     });
   },
@@ -37,31 +44,73 @@ const invoiceController = {
     Invoice.getById(invoiceId, (err, invoiceResults) => {
       if (err || invoiceResults.length === 0) return res.status(404).json({ message: 'Invoice tidak ditemukan' });
       const invoice = invoiceResults[0];
+      
       Order.getById(invoice.order_id, (err, orderResults) => {
         if (err || orderResults.length === 0) return res.status(404).json({ message: 'Order tidak ditemukan' });
         const order = orderResults[0];
+        
         // Ambil detail barang dari order_detail
-        const db = require('../config/db').getConnection();
-        db.query('SELECT od.*, b.nama_barang FROM order_detail od JOIN barang b ON od.barang_id = b.barang_id WHERE od.order_id = ?', [order.order_id], (err, items) => {
+        OrderDetail.getByOrderId(order.order_id, (err, items) => {
           if (err) return res.status(500).json({ message: 'Gagal ambil detail barang' });
+          
           // Generate PDF
           const doc = new PDFDocument();
-          const filePath = path.join(__dirname, '../public/invoice_' + invoiceId + '.pdf');
+          const fileName = 'invoice_' + invoiceId + '.pdf';
+          const filePath = path.join(__dirname, '../public', fileName);
+          
+          // Pastikan folder public ada
+          if (!fs.existsSync(path.join(__dirname, '../public'))) {
+            fs.mkdirSync(path.join(__dirname, '../public'));
+          }
+          
           doc.pipe(fs.createWriteStream(filePath));
-          doc.fontSize(20).text('INVOICE', { align: 'center' });
+          
+          // Header Invoice
+          doc.fontSize(25).text('INVOICE', { align: 'center' });
           doc.moveDown();
-          doc.fontSize(12).text('Invoice ID: ' + invoice.invoice_id);
-          doc.text('Order ID: ' + order.order_id);
-          doc.text('Tanggal: ' + invoice.tanggal);
-          doc.text('Total: Rp ' + order.total);
+          doc.fontSize(12).text('================================================');
           doc.moveDown();
-          doc.text('Barang:');
-          items.forEach(item => {
-            doc.text(`- ${item.nama_barang} x${item.jumlah} @Rp${item.harga_satuan} = Rp${item.subtotal}`);
+          
+          // Info Invoice
+          doc.fontSize(12).text('Invoice ID: INV-' + invoice.invoice_id);
+          doc.text('Order ID: ORD-' + order.order_id);
+          doc.text('Tanggal: ' + new Date(invoice.tanggal).toLocaleDateString('id-ID'));
+          doc.text('Toko: ' + order.nama_toko);
+          doc.text('Status: ' + order.status.toUpperCase());
+          doc.moveDown();
+          doc.text('================================================');
+          doc.moveDown();
+          
+          // Detail Barang
+          doc.fontSize(14).text('Detail Barang:', { underline: true });
+          doc.moveDown(0.5);
+          doc.fontSize(11);
+          
+          items.forEach((item, index) => {
+            doc.text(`${index + 1}. ${item.nama_barang}`);
+            doc.text(`   Jumlah: ${item.jumlah} x Rp ${Number(item.harga_satuan).toLocaleString('id-ID')} = Rp ${Number(item.subtotal).toLocaleString('id-ID')}`);
+            doc.moveDown(0.3);
           });
+          
+          doc.moveDown();
+          doc.text('================================================');
+          doc.fontSize(14).text('TOTAL: Rp ' + Number(order.total).toLocaleString('id-ID'), { bold: true });
+          doc.text('================================================');
+          
+          // Footer
+          doc.moveDown(2);
+          doc.fontSize(10).text('Terima kasih atas pembelian Anda!', { align: 'center' });
+          
           doc.end();
+          
           doc.on('finish', () => {
-            res.download(filePath, 'invoice_' + invoiceId + '.pdf');
+            // Update file_url di database
+            Invoice.update(invoiceId, { file_url: '/public/' + fileName }, (err) => {
+              if (err) console.error('Gagal update file_url:', err);
+            });
+            
+            // Download file
+            res.download(filePath, fileName);
           });
         });
       });

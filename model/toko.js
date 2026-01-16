@@ -21,6 +21,10 @@ const Toko = {
   delete: (id, callback) => {
     const db = getConnection();
     db.query('DELETE FROM toko WHERE toko_id=?', [id], callback);
+  },
+  checkOrderExists: (id, callback) => {
+    const db = getConnection();
+    db.query('SELECT COUNT(*) as count FROM orders WHERE toko_id=?', [id], callback);
   }
 };
 
